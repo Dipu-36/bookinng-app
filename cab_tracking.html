@@ -1,0 +1,398 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Cab Booking POC - Leaflet OpenStreetMap</title>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+    />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  </head>
+  <body>
+    <h1>Cab Booking POC - Leaflet + OpenStreetMap</h1>
+
+    <div>
+      <h2>Find Route and Travel Time</h2>
+      <label>Source Address (Location name):</label>
+      <input
+        type="text"
+        id="sourceInput"
+        placeholder="e.g., Times Square, New York OR 41.7580,-73.9855"
+        value="Times Square, New York"
+      />
+      <br /><br />
+
+      <label>Destination Address (Location name):</label>
+      <input
+        type="text"
+        id="destinationInput"
+        placeholder="e.g., Central Park, New York OR 40.7829,-73.9654"
+        value="Central Park, New York"
+      />
+      <br /><br />
+
+      <button onclick="findRoute()">Find Route and Distance</button>
+      <br /><br />
+
+      <div
+        id="routeInfo"
+        style="border: 1px solid black; padding: 10px; margin: 10px 0"
+      >
+        <h3>Route Information:</h3>
+        <p>Distance: <span id="distanceDisplay">-</span></p>
+        <p>Estimated Duration (40 km/h): <span id="durationDisplay">-</span></p>
+        <p>Status: <span id="statusDisplay">-</span></p>
+      </div>
+    </div>
+
+    <hr />
+
+    <div>
+      <h2>Book Cab and Track Real-time Position</h2>
+      <button onclick="bookCab()">Book Cab</button>
+      <button onclick="stopTracking()">Stop Tracking</button>
+      <br /><br />
+
+      <div
+        id="bookingInfo"
+        style="border: 1px solid black; padding: 10px; margin: 10px 0"
+      >
+        <h3>Booking Status:</h3>
+        <p>Booking ID: <span id="bookingID">Not Booked</span></p>
+        <p>Cab Status: <span id="cabStatus">-</span></p>
+        <p>Cab Current Position: <span id="cabPosition">-</span></p>
+        <p>Distance from You: <span id="distanceFromUser">-</span></p>
+        <p>Time to Reach: <span id="timeToReach">-</span></p>
+        <p>Cab Movement (Last 2 sec): <span id="cabMovement">-</span></p>
+        <p>Total Distance Traveled: <span id="totalDistance">-</span></p>
+      </div>
+    </div>
+
+    <hr />
+
+    <div>
+      <h2>Map Display</h2>
+      <div
+        id="map"
+        style="width: 100%; height: 500px; border: 1px solid black"
+      ></div>
+    </div>
+
+    <script>
+      let map;
+      let userLocation = [40.758, -73.9855]; // Times Square default [lat, lng]
+      let destinationLocation = [40.7829, -73.9654]; // Central Park default [lat, lng]
+      let cabLocation = [...userLocation];
+      let cabMarker;
+      let userMarker;
+      let destinationMarker;
+      let trackingInterval;
+      let isBooked = false;
+      let bookingID;
+      let previousCabLocation = [...cabLocation];
+      let routePolyline;
+      let totalDistanceTraveled = 0;
+
+      // Haversine formula to calculate distance between two coordinates
+      function calculateDistance(lat1, lng1, lat2, lng2) {
+        const R = 6371; // Earth's radius in km
+        const dLat = ((lat2 - lat1) * Math.PI) / 180;
+        const dLng = ((lng2 - lng1) * Math.PI) / 180;
+        const a =
+          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos((lat1 * Math.PI) / 180) *
+            Math.cos((lat2 * Math.PI) / 180) *
+            Math.sin(dLng / 2) *
+            Math.sin(dLng / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+      }
+
+      // Initialize Map
+      function initMap() {
+        // Create map centered on user location
+        map = L.map("map").setView([userLocation[0], userLocation[1]], 13);
+
+        // Add OpenStreetMap tile layer
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap contributors",
+          maxZoom: 19,
+        }).addTo(map);
+
+        // Add user marker
+        userMarker = L.marker([userLocation[0], userLocation[1]], {
+          title: "Your Location",
+        })
+          .addTo(map)
+          .bindPopup("Your Location");
+        userMarker.setIcon(
+          L.icon({
+            iconUrl:
+              "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png",
+            shadowUrl:
+              "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41],
+          }),
+        );
+
+        // Add destination marker
+        destinationMarker = L.marker(
+          [destinationLocation[0], destinationLocation[1]],
+          {
+            title: "Destination",
+          },
+        )
+          .addTo(map)
+          .bindPopup("Destination");
+        destinationMarker.setIcon(
+          L.icon({
+            iconUrl:
+              "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png",
+            shadowUrl:
+              "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41],
+          }),
+        );
+
+        // Add cab marker
+        cabMarker = L.marker([cabLocation[0], cabLocation[1]], {
+          title: "Cab Location",
+        })
+          .addTo(map)
+          .bindPopup("Cab");
+        cabMarker.setIcon(
+          L.icon({
+            iconUrl:
+              "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png",
+            shadowUrl:
+              "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41],
+          }),
+        );
+      }
+
+      // Parse coordinates from input or geocode location name
+      function parseCoordinates(input) {
+        const parts = input.trim().split(",");
+        if (parts.length === 2) {
+          const lat = parseFloat(parts[0]);
+          const lng = parseFloat(parts[1]);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            return Promise.resolve([lat, lng]); // If it's already coordinates, return them
+          }
+        }
+        // If not coordinates, geocode the location name using Nominatim
+        return geocodeLocation(input); // Call geocoding function
+      }
+
+      // Geocode location name using Nominatim (geocoding)
+      function geocodeLocation(locationName) {
+        return fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(locationName)}&limit=1`,
+        )
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.length > 0) {
+              return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+            } else {
+              throw new Error("Location not found: " + locationName);
+            }
+          })
+          .catch((error) => {
+            throw error;
+          });
+      }
+
+      // Find Route
+      function findRoute() {
+        const sourceInput = document.getElementById("sourceInput").value;
+        const destinationInput =
+          document.getElementById("destinationInput").value;
+
+        document.getElementById("statusDisplay").innerText =
+          "Finding locations...";
+
+        // Geocode both locations using Promise.all
+        Promise.all([
+          parseCoordinates(sourceInput),
+          parseCoordinates(destinationInput),
+        ])
+          .then(([source, destination]) => {
+            userLocation = source;
+            destinationLocation = destination;
+
+            // Update markers
+            userMarker.setLatLng([userLocation[0], userLocation[1]]);
+            destinationMarker.setLatLng([
+              destinationLocation[0],
+              destinationLocation[1],
+            ]);
+
+            // Calculate distance
+            const distance = calculateDistance(
+              userLocation[0],
+              userLocation[1],
+              destinationLocation[0],
+              destinationLocation[1],
+            );
+
+            // Calculate time (assuming 40 km/h average speed)
+            const timeMinutes = Math.ceil((distance / 40) * 60);
+
+            // Draw route line on map
+            if (routePolyline) {
+              map.removeLayer(routePolyline);
+            }
+            routePolyline = L.polyline(
+              [
+                [userLocation[0], userLocation[1]],
+                [destinationLocation[0], destinationLocation[1]],
+              ],
+              { color: "blue", weight: 3 },
+            ).addTo(map);
+
+            // Fit map to show both points
+            map.fitBounds(routePolyline.getBounds(), { padding: [50, 50] });
+
+            document.getElementById("distanceDisplay").innerText =
+              distance.toFixed(2) + " km";
+            document.getElementById("durationDisplay").innerText =
+              timeMinutes + " minutes";
+            document.getElementById("statusDisplay").innerText =
+              "Route calculated successfully!";
+          })
+          .catch((error) => {
+            document.getElementById("statusDisplay").innerText =
+              "Error: " + error.message;
+          });
+      }
+
+      // Book Cab
+      function bookCab() {
+        if (!userLocation || !destinationLocation) {
+          alert("Please find a route first!");
+          return;
+        }
+
+        bookingID = "BOOK" + Math.floor(Math.random() * 100000);
+        isBooked = true;
+        cabLocation = [...userLocation];
+        cabMarker.setLatLng([cabLocation[0], cabLocation[1]]);
+        previousCabLocation = [...cabLocation];
+        totalDistanceTraveled = 0;
+
+        document.getElementById("bookingID").innerText = bookingID;
+        document.getElementById("cabStatus").innerText =
+          "Cab Assigned - Coming to pick you up";
+        document.getElementById("totalDistance").innerText = "0 km";
+
+        // Start tracking cab
+        startTracking();
+      }
+
+      // Start Real-time Tracking
+      function startTracking() {
+        if (!isBooked) {
+          alert("Please book a cab first!");
+          return;
+        }
+
+        // Simulate cab movement every 2 seconds
+        trackingInterval = setInterval(function () {
+          if (!isBooked) return;
+
+          // Store previous position
+          previousCabLocation = [...cabLocation];
+
+          // Simulate cab moving towards destination
+          const latDiff = (destinationLocation[0] - cabLocation[0]) * 0.05;
+          const lngDiff = (destinationLocation[1] - cabLocation[1]) * 0.05;
+
+          cabLocation[0] += latDiff;
+          cabLocation[1] += lngDiff;
+
+          // Update cab marker
+          cabMarker.setLatLng([cabLocation[0], cabLocation[1]]);
+
+          // Calculate distance from user to cab
+          const distFromUser = calculateDistance(
+            userLocation[0],
+            userLocation[1],
+            cabLocation[0],
+            cabLocation[1],
+          );
+
+          // Rough time calculation (assuming 40 km/h average)
+          const timeToReachMinutes = Math.ceil((distFromUser / 40) * 60);
+
+          // Calculate movement distance in last update
+          const movementDistance = calculateDistance(
+            previousCabLocation[0],
+            previousCabLocation[1],
+            cabLocation[0],
+            cabLocation[1],
+          );
+
+          // Add to total distance
+          totalDistanceTraveled += movementDistance;
+
+          // Update UI
+          document.getElementById("cabPosition").innerText =
+            "Lat: " +
+            cabLocation[0].toFixed(4) +
+            ", Lng: " +
+            cabLocation[1].toFixed(4);
+          document.getElementById("distanceFromUser").innerText =
+            distFromUser.toFixed(2) + " km";
+          document.getElementById("timeToReach").innerText =
+            timeToReachMinutes + " minutes";
+          document.getElementById("cabMovement").innerText =
+            (movementDistance * 1000).toFixed(2) + " meters";
+          document.getElementById("totalDistance").innerText =
+            totalDistanceTraveled.toFixed(2) + " km";
+
+          // Check if cab reached destination
+          const distToDestination = calculateDistance(
+            destinationLocation[0],
+            destinationLocation[1],
+            cabLocation[0],
+            cabLocation[1],
+          );
+
+          if (distToDestination < 0.2) {
+            // Less than 200 meters
+            document.getElementById("cabStatus").innerText =
+              "Cab Arrived at Destination!";
+            stopTracking();
+          }
+        }, 2000);
+
+        document.getElementById("cabStatus").innerText =
+          "Tracking in progress...";
+      }
+
+      // Stop Tracking
+      function stopTracking() {
+        if (trackingInterval) {
+          clearInterval(trackingInterval);
+          trackingInterval = null;
+        }
+        isBooked = false;
+        document.getElementById("cabStatus").innerText = "Tracking stopped";
+      }
+
+      // Initialize map when page loads
+      window.addEventListener("load", initMap);
+    </script>
+  </body>
+</html>
+
